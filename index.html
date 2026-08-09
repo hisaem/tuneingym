@@ -1,0 +1,842 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tune-In Gym - Japanese Listening Habit</title>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              zen: { 50:'#f7f7f5',100:'#efefe9',200:'#dcdcd5',300:'#c2c2b6',400:'#a3a393',500:'#858571',600:'#6b6b58',700:'#565646',800:'#46463a',900:'#3a3a31' },
+              tune: { 50:'#f2f3fa',100:'#e2e4f2',200:'#c5c9e4',300:'#a3aad2',400:'#868ec2',500:'#6b73ae',600:'#565d93',700:'#454a76',800:'#343858',900:'#26293f' }
+            },
+            fontFamily: { sans: ['"Noto Sans JP"', 'sans-serif'] },
+          },
+        },
+      }
+    </script>
+
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;700&display=swap" rel="stylesheet">
+
+    <script src="https://unpkg.com/@babel/standalone@7.23.6/babel.min.js"></script>
+
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client"
+      }
+    }
+    </script>
+
+    <style>
+      body { font-family: 'Noto Sans JP', sans-serif; background-color: #f7f7f5; color: #46463a; }
+      @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+      .animate-fade-in { animation: fadeIn 0.4s ease-out forwards; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module" data-presets="react">
+      import React, { useState, useEffect } from 'react';
+      import { createRoot } from 'react-dom/client';
+
+      // ===== サーバー(GAS Web API)呼び出しヘルパー =====
+      // ★デプロイしたGASウェブアプリのURL（…/exec）をここに貼る★
+      const API_URL = 'https://script.google.com/macros/s/AKfycbwNGJGUi8gu6Nk3gRnUKQxr86cS0oHXLVyJFPVJmrPRxJCMV2wEzPNNqNfM2gdiVBOu/exec';
+
+      const gs = async (fn, ...args) => {
+        const res = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({ fn, args }),
+          redirect: 'follow'
+        });
+        if (!res.ok) throw new Error('Server error (HTTP ' + res.status + ')');
+        const json = await res.json();
+        if (!json.ok) throw new Error(json.error || 'Unknown server error');
+        return json.data;
+      };
+
+      const friendlyError = (e) => {
+        const m = (e && e.message) || String(e);
+        if (m.indexOf('AUTH:') !== -1) return m.replace(/^.*AUTH:\s*/, '');
+        return m;
+      };
+
+      // ===== 認証情報の保存 =====
+      // 自分のキーに加えて、同じGitHub PagesにあるSpeak-Up Gym / Write-Up Gymの
+      // ログイン情報も読む。どちらかにログイン済みの学生は入力なしで入れる。
+      const AUTH_KEY = 'TIG_AUTH';
+      const SIBLING_KEYS = ['SUG2_AUTH', 'wh_auth'];
+
+      const readKey = (k) => { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } };
+      const loadAuth = () => {
+        const own = readKey(AUTH_KEY);
+        if (own && own.name && own.pin) return own;
+        for (const k of SIBLING_KEYS) {
+          const a = readKey(k);
+          if (a && a.name && a.pin) return { name: a.name, pin: a.pin };
+        }
+        return null;
+      };
+      const saveAuth = (a) => {
+        try { a ? localStorage.setItem(AUTH_KEY, JSON.stringify(a)) : localStorage.removeItem(AUTH_KEY); } catch (e) {}
+      };
+      const loadTeacher = () => { try { return localStorage.getItem('TIG_TEACHER') || readKey('wh_teacher'); } catch (e) { return null; } };
+
+      // ===== 日付ユーティリティ =====
+      const pad = (n) => (n < 10 ? '0' : '') + n;
+      const addDays = (ymd, n) => {
+        const p = ymd.split('-');
+        const d = new Date(+p[0], +p[1] - 1, +p[2]);
+        d.setDate(d.getDate() + n);
+        return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+      };
+      const diffDays = (a, b) => {
+        const pa = a.split('-'), pb = b.split('-');
+        return Math.round((new Date(+pb[0], +pb[1] - 1, +pb[2]) - new Date(+pa[0], +pa[1] - 1, +pa[2])) / 86400000);
+      };
+
+      const LEVEL = ['#efefe9', '#c5c9e4', '#a3aad2', '#6b73ae'];
+      const BONUS_LEVEL = ['#efefe9', '#fae4bd', '#f3c579', '#e09f3e'];   // Pump-Up Week は琥珀色
+      const levelOf = (m) => (m >= 20 ? 3 : m >= 10 ? 2 : m > 0 ? 1 : 0);
+
+      // 週ごとの集計とストリークをまとめて計算。
+      // 週は cfg.weekList（[{n, monday, bonus?, label?}]）で与えられる。
+      //   通常の週  … MIN_MINUTES 以上で ✓。ストリークに数える
+      //   ボーナス週… 任意参加。✓ もストリークも達成率も影響しない。合計分数には入る
+      // ストリークはリストの並び順で数え、ボーナス週は素通りするので途切れない。
+      const summarize = (entries, cfg) => {
+        const weeks = [];
+        let weeksDone = 0, totalMin = 0, bonusMin = 0, streak = 0, run = 0;
+        cfg.weekList.forEach((w) => {
+          const days = [];
+          let min = 0;
+          for (let d = 0; d < 7; d++) {
+            const ymd = addDays(w.monday, d);
+            const e = entries[ymd];
+            if (e) min += e.minutes;
+            days.push({ ymd, minutes: e ? e.minutes : 0, shows: e ? e.shows : [], future: diffDays(cfg.today, ymd) > 0, today: ymd === cfg.today });
+          }
+          totalMin += min;
+          const started = diffDays(w.monday, cfg.today) >= 0;              // その週が始まっている
+          const finished = diffDays(addDays(w.monday, 6), cfg.today) > 0;  // その週が終わった
+
+          if (w.bonus) {
+            // ボーナス週はストリークにも達成数にも影響させない（素通り）
+            bonusMin += min;
+            weeks.push({ n: w.n, monday: w.monday, days, minutes: min, bonus: true, label: w.label,
+                         ok: false, past: started, now: String(w.n) === String(cfg.currentWeek) });
+            return;
+          }
+
+          const ok = min >= cfg.minMinutes;
+          if (ok) weeksDone++;
+          if (ok) run++; else if (finished) run = 0;   // 終わった週で未達成ならリセット
+          if (started) streak = run;                   // 今週がまだでも途切れない
+          weeks.push({ n: w.n, monday: w.monday, days, minutes: min, ok, past: started,
+                       now: String(w.n) === String(cfg.currentWeek) });
+        });
+
+        const nowWeek = weeks.find((x) => String(x.n) === String(cfg.currentWeek));
+        return { weeks, weeksDone, totalMin, bonusMin, streak,
+                 thisWeekMinutes: nowWeek ? nowWeek.minutes : 0,
+                 thisWeekBonus: !!(nowWeek && nowWeek.bonus),
+                 thisWeekLabel: nowWeek ? nowWeek.label : '' };
+      };
+
+      // 今日が記録できる日かどうか、できないならその理由
+      const todayStatus = (cfg) => {
+        if (cfg.currentWeek) return { open: true };
+        const list = cfg.weekList;
+        if (!list.length) return { open: false, msg: 'Not set up yet.' };
+        if (diffDays(cfg.today, list[0].monday) > 0) return { open: false, msg: 'Tune-In Gym opens on ' + list[0].monday + '.' };
+        return { open: false, msg: 'The listening weeks are over. Thank you.' };
+      };
+
+      // ===== 小さい部品（Speak-Up Gym / Write-Up Gym と同じ作り） =====
+      const Spinner = ({ emoji, title, subtitle }) => (
+        <div className="flex flex-col items-center justify-center min-h-[60vh] text-center space-y-6">
+          <div className="relative w-24 h-24">
+            <div className="absolute top-0 left-0 w-full h-full border-4 border-zen-200 rounded-full"></div>
+            <div className="absolute top-0 left-0 w-full h-full border-4 border-tune-500 rounded-full border-t-transparent animate-spin"></div>
+            <div className="absolute inset-0 flex items-center justify-center text-4xl">{emoji}</div>
+          </div>
+          <h3 className="text-xl font-medium text-zen-800">{title}</h3>
+          <p className="text-zen-500 max-w-sm">{subtitle}</p>
+        </div>
+      );
+
+      // 共通の外枠（ヘッダー付き）。SUGのヘッダーに合わせている。
+      const Shell = ({ who, onLogout, wide, children }) => (
+        <div className="min-h-screen bg-zen-50 text-zen-800 font-sans">
+          <header className="bg-white border-b border-zen-200 sticky top-0 z-10">
+            <div className="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 bg-orange-100 rounded-full flex items-center justify-center text-xl shadow-sm border border-orange-200">🐯</div>
+                <h1 className="text-xl font-bold tracking-tight">Tune-In Gym</h1>
+              </div>
+              <div className="flex items-center gap-4">
+                <span className="text-sm font-medium text-zen-600 hidden sm:block">{who}</span>
+                <button onClick={onLogout} className="text-xs text-zen-400 hover:text-tune-600 underline">Logout</button>
+              </div>
+            </div>
+          </header>
+          <main className={(wide ? 'max-w-5xl' : 'max-w-lg') + ' mx-auto px-4 py-8 pb-20 animate-fade-in'}>
+            {children}
+          </main>
+        </div>
+      );
+
+      const Stat = ({ value, label }) => (
+        <div className="flex-1 bg-white border border-zen-200 rounded-2xl py-3 text-center">
+          <div className="text-3xl font-bold text-tune-600 leading-tight">{value}</div>
+          <div className="text-[10px] text-zen-500 mt-0.5">{label}</div>
+        </div>
+      );
+
+      // ===== ログイン画面（Speak-Up Gym / Write-Up Gym と同じ作り） =====
+      const LoginScreen = ({ students, onStudentLogin, onTeacherLogin, error, busy }) => {
+        const [mode, setMode] = useState('student');
+        const [name, setName] = useState('');
+        const [pin, setPin] = useState('');
+        const [pin2, setPin2] = useState('');
+        const [code, setCode] = useState('');
+        const [codeSent, setCodeSent] = useState(false);
+        const [maskedEmail, setMaskedEmail] = useState('');
+        const [localBusy, setLocalBusy] = useState(false);
+        const [localError, setLocalError] = useState('');
+        const [passcode, setPasscode] = useState('');
+
+        const isBusy = busy || localBusy;
+        const shownError = localError || error;
+
+        const switchMode = (m) => {
+          setMode(m); setLocalError('');
+          setPin(''); setPin2(''); setCode(''); setCodeSent(false); setMaskedEmail('');
+        };
+
+        const run = async (fn) => {
+          setLocalBusy(true); setLocalError('');
+          try { await fn(); } catch (e) { setLocalError(friendlyError(e)); }
+          setLocalBusy(false);
+        };
+
+        const doSetPin = () => run(async () => { await gs('setPin', name, pin, pin2); onStudentLogin(name, pin); });
+        const doSendCode = () => run(async () => {
+          const d = await gs('requestPinReset', name);
+          setCodeSent(true); setMaskedEmail(d.maskedEmail || '');
+        });
+        const doReset = () => run(async () => { await gs('resetPin', name, code, pin, pin2); onStudentLogin(name, pin); });
+
+        const nameSelect = (
+          <div>
+            <label className="text-xs font-bold text-zen-500 uppercase">Your Name</label>
+            <select value={name} onChange={(e) => setName(e.target.value)}
+              className="w-full mt-1 border border-zen-300 rounded-xl px-4 py-3 bg-white focus:outline-none focus:border-tune-500">
+              <option value="">-- Select your name --</option>
+              {students.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+        );
+        const pinField = (label, val, setVal, ph) => (
+          <div>
+            <label className="text-xs font-bold text-zen-500 uppercase">{label}</label>
+            <input type="password" value={val} onChange={(e) => setVal(e.target.value)} placeholder={ph}
+              className="w-full mt-1 border border-zen-300 rounded-xl px-4 py-3 focus:outline-none focus:border-tune-500" />
+          </div>
+        );
+
+        return (
+          <div className="min-h-screen flex items-center justify-center bg-zen-50 p-4">
+            <div className="max-w-md w-full bg-white p-8 rounded-2xl shadow-xl border border-zen-200 text-center">
+              <div className="w-20 h-20 bg-orange-100 rounded-full flex items-center justify-center text-5xl shadow-md mx-auto mb-6 border-2 border-orange-200">🐯</div>
+              <h1 className="text-3xl font-bold text-zen-800 mb-2">Tune-In Gym</h1>
+              <p className="text-zen-500 mb-8">Japanese Listening Habit<br/>10+ minutes a week with Torai-kun</p>
+
+              {shownError && <div className="bg-red-50 text-red-700 text-sm p-3 rounded-lg mb-4 border border-red-100">{shownError}</div>}
+
+              {mode === 'student' && (
+                <div className="space-y-4 text-left">
+                  {nameSelect}
+                  <div>
+                    <label className="text-xs font-bold text-zen-500 uppercase">Your PIN</label>
+                    <input type="password" value={pin} onChange={(e) => setPin(e.target.value)}
+                      placeholder="Same PIN as Speak-Up / Write-Up Gym"
+                      className="w-full mt-1 border border-zen-300 rounded-xl px-4 py-3 focus:outline-none focus:border-tune-500"
+                      onKeyDown={(e) => { if (e.key === 'Enter') onStudentLogin(name, pin); }} />
+                  </div>
+                  <button onClick={() => onStudentLogin(name, pin)} disabled={isBusy || !name || !pin}
+                    className="w-full py-4 bg-tune-600 hover:bg-tune-500 text-white rounded-full font-bold shadow-lg transition-all disabled:opacity-50">
+                    {isBusy ? 'Checking...' : 'Start'}
+                  </button>
+                  <div className="flex justify-between text-xs">
+                    <button onClick={() => switchMode('setpin')} className="text-tune-600 hover:text-tune-500 underline">First time? Set your PIN</button>
+                    <button onClick={() => switchMode('forgot')} className="text-zen-400 hover:text-tune-600 underline">Forgot your PIN?</button>
+                  </div>
+                  <p className="text-center">
+                    <button onClick={() => switchMode('teacher')} className="text-xs text-zen-400 hover:text-tune-600 underline">Teacher login</button>
+                  </p>
+                </div>
+              )}
+
+              {mode === 'setpin' && (
+                <div className="space-y-4 text-left">
+                  <p className="text-xs text-zen-500">Choose your own PIN (at least 4 characters) and enter it twice. The same PIN works for Tune-In Gym, Speak-Up Gym and Write-Up Gym.</p>
+                  {nameSelect}
+                  {pinField('New PIN', pin, setPin, 'At least 4 characters')}
+                  {pinField('Confirm New PIN', pin2, setPin2, 'Type it again')}
+                  <button onClick={doSetPin} disabled={isBusy || !name || !pin || !pin2}
+                    className="w-full py-4 bg-tune-600 hover:bg-tune-500 text-white rounded-full font-bold shadow-lg disabled:opacity-50">
+                    {isBusy ? 'Saving...' : 'Set PIN & Start'}
+                  </button>
+                  <p className="text-center">
+                    <button onClick={() => switchMode('student')} className="text-xs text-zen-400 hover:text-tune-600 underline">← Back to login</button>
+                  </p>
+                </div>
+              )}
+
+              {mode === 'forgot' && (
+                <div className="space-y-4 text-left">
+                  {!codeSent ? (
+                    <>
+                      <p className="text-xs text-zen-500">We will email a 6-digit code to the address on your class roster.</p>
+                      {nameSelect}
+                      <button onClick={doSendCode} disabled={isBusy || !name}
+                        className="w-full py-4 bg-tune-600 hover:bg-tune-500 text-white rounded-full font-bold shadow-lg disabled:opacity-50">
+                        {isBusy ? 'Sending...' : 'Send reset code'}
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-xs text-zen-500">A code was sent to {maskedEmail}. It is valid for 30 minutes.</p>
+                      <div>
+                        <label className="text-xs font-bold text-zen-500 uppercase">6-digit code</label>
+                        <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="123456" inputMode="numeric"
+                          className="w-full mt-1 border border-zen-300 rounded-xl px-4 py-3 tracking-widest focus:outline-none focus:border-tune-500" />
+                      </div>
+                      {pinField('New PIN', pin, setPin, 'At least 4 characters')}
+                      {pinField('Confirm New PIN', pin2, setPin2, 'Type it again')}
+                      <button onClick={doReset} disabled={isBusy || !name || !code || !pin || !pin2}
+                        className="w-full py-4 bg-tune-600 hover:bg-tune-500 text-white rounded-full font-bold shadow-lg disabled:opacity-50">
+                        {isBusy ? 'Resetting...' : 'Reset PIN & Start'}
+                      </button>
+                    </>
+                  )}
+                  <p className="text-center">
+                    <button onClick={() => switchMode('student')} className="text-xs text-zen-400 hover:text-tune-600 underline">← Back to login</button>
+                  </p>
+                </div>
+              )}
+
+              {mode === 'teacher' && (
+                <div className="space-y-4 text-left">
+                  <div>
+                    <label className="text-xs font-bold text-zen-500 uppercase">Teacher passcode</label>
+                    <input type="password" value={passcode} onChange={(e) => setPasscode(e.target.value)}
+                      className="w-full mt-1 border border-zen-300 rounded-xl px-4 py-3 focus:outline-none focus:border-tune-500"
+                      onKeyDown={(e) => { if (e.key === 'Enter') onTeacherLogin(passcode); }} />
+                  </div>
+                  <button onClick={() => onTeacherLogin(passcode)} disabled={isBusy || !passcode}
+                    className="w-full py-4 bg-zen-700 hover:bg-zen-600 text-white rounded-full font-bold shadow-lg disabled:opacity-50">
+                    {isBusy ? 'Checking...' : 'Teacher login'}
+                  </button>
+                  <p className="text-center">
+                    <button onClick={() => switchMode('student')} className="text-xs text-zen-400 hover:text-tune-600 underline">Back to student login</button>
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      };
+
+      // ===== カレンダー =====
+      const Calendar = ({ sum }) => (
+        <div className="bg-white border border-zen-200 rounded-2xl p-4">
+          <div className="grid gap-1 mb-1.5" style={{ gridTemplateColumns: '28px repeat(7, 1fr) 24px' }}>
+            <div></div>
+            {['M','T','W','T','F','S','S'].map((d, i) => <div key={i} className="text-[10px] text-zen-400 text-center">{d}</div>)}
+            <div></div>
+          </div>
+          {sum.weeks.map((w) => (
+            <div key={String(w.n)}>
+              {w.bonus && (
+                <div className="flex items-center gap-2 mt-2 mb-1.5">
+                  <div className="h-px flex-1 bg-amber-200"></div>
+                  <span className="text-[10px] font-bold tracking-wide text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2.5 py-0.5">
+                    💪 {w.label} · optional
+                  </span>
+                  <div className="h-px flex-1 bg-amber-200"></div>
+                </div>
+              )}
+              <div className="grid gap-1 items-center mb-1" style={{ gridTemplateColumns: '28px repeat(7, 1fr) 24px' }}>
+                <div className={'text-[10px] text-right pr-1 ' +
+                  (w.bonus ? (w.now ? 'text-amber-700 font-bold' : 'text-amber-600')
+                           : (w.now ? 'text-tune-600 font-bold' : 'text-zen-400'))}>
+                  {w.bonus ? 'PU' : 'W' + w.n}
+                </div>
+                {w.days.map((d) => (
+                  <div key={d.ymd}
+                    title={d.ymd + (d.minutes ? '  ·  ' + d.minutes + ' min  ·  ' + d.shows.join(', ') : '')}
+                    className="rounded-md"
+                    style={{
+                      aspectRatio: '1 / 1',
+                      background: d.minutes
+                        ? (w.bonus ? BONUS_LEVEL[levelOf(d.minutes)] : LEVEL[levelOf(d.minutes)])
+                        : (d.future ? '#f7f7f5' : LEVEL[0]),
+                      boxShadow: d.today ? '0 0 0 2px #565d93' : 'none'
+                    }}></div>
+                ))}
+                <div className={'text-xs text-center ' +
+                  (w.bonus ? 'text-amber-500' : (w.ok ? 'text-tune-600 font-bold' : 'text-zen-300'))}>
+                  {w.bonus ? (w.minutes ? '★' : '') : (w.ok ? '✓' : (w.past ? '·' : ''))}
+                </div>
+              </div>
+              {w.bonus && <div className="h-px bg-amber-200 mb-2 mt-1.5"></div>}
+            </div>
+          ))}
+          <div className="flex items-center justify-end gap-1 mt-2 text-[10px] text-zen-400">
+            less
+            {LEVEL.slice(1).map((c, i) => <span key={i} className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: c }}></span>)}
+            more
+          </div>
+        </div>
+      );
+
+      // ===== 学生の画面 =====
+      const StudentApp = ({ auth, boot, state, setState, onLogout }) => {
+        const cfg = boot.config;
+        const [step, setStep] = useState('home');   // home | same | genre | show | other | minutes | done
+        const [browse, setBrowse] = useState(false);
+        const [genre, setGenre] = useState(null);
+        const [pick, setPick] = useState({ genreId: '', showId: '', showName: '' });
+        const [date, setDate] = useState(cfg.today);
+        const [otherName, setOtherName] = useState('');
+        const [busy, setBusy] = useState(false);
+        const [err, setErr] = useState('');
+        const [lastSaved, setLastSaved] = useState(null);
+
+        const sum = summarize(state.entries, cfg);
+        const open = todayStatus(cfg);
+        const hasLast = !!(state.lastShow && state.lastShow.showName);
+
+        const go = (s) => { setStep(s); setErr(''); window.scrollTo(0, 0); };
+
+        const startRecord = () => { setBrowse(false); setDate(cfg.today); go(hasLast ? 'same' : 'genre'); };
+        const openGenre = (g) => { setGenre(g); setPick((p) => ({ ...p, genreId: g.id })); go('show'); };
+        const chooseShow = (s) => {
+          if (browse) return;
+          setPick({ genreId: genre.id, showId: s.id, showName: s.name });
+          go('minutes');
+        };
+        const useSame = () => { setPick({ ...state.lastShow }); go('minutes'); };
+        const confirmOther = () => {
+          if (!otherName.trim()) { setErr('Please enter the name of the podcast.'); return; }
+          setPick({ genreId: genre ? genre.id : '', showId: 'other', showName: otherName.trim() });
+          go('minutes');
+        };
+
+        const save = async (minutes) => {
+          setBusy(true); setErr('');
+          try {
+            const res = await gs('logListen', auth, { date, ...pick, minutes });
+            setState(res);
+            setLastSaved({ showName: pick.showName, minutes });
+            go('done');
+          } catch (e) { setErr(friendlyError(e)); }
+          setBusy(false);
+        };
+
+        const undo = async () => {
+          setBusy(true);
+          try { setState(await gs('undoLast', auth)); go('home'); }
+          catch (e) { setErr(friendlyError(e)); }
+          setBusy(false);
+        };
+
+        // 過去7日のうち、記録できる週に入っている日だけを出す（休みや学期外は除く）
+        const inAWeek = (ymd) => cfg.weekList.some((w) => {
+          const d = diffDays(w.monday, ymd);
+          return d >= 0 && d <= 6;
+        });
+        const dateOptions = [0, 1, 2, 3, 4, 5, 6]
+          .map((i) => {
+            const ymd = addDays(cfg.today, -i);
+            return { ymd, label: i === 0 ? 'Today' : i === 1 ? 'Yesterday' : ymd.slice(5).replace('-', '/') };
+          })
+          .filter((o) => inAWeek(o.ymd));
+
+        const Back = ({ to }) => (
+          <button onClick={() => go(to)} className="text-sm text-zen-400 hover:text-zen-700 mb-3">← Back</button>
+        );
+
+        const Card = ({ onClick, children }) => (
+          <div onClick={onClick}
+            className={'bg-white border border-zen-200 rounded-2xl p-4 mb-2 transition-all ' + (onClick ? 'cursor-pointer hover:border-tune-500 hover:-translate-y-px' : '')}>
+            {children}
+          </div>
+        );
+
+        return (
+          <Shell who={auth.name} onLogout={onLogout}>
+            <>
+
+              {step === 'home' && (
+                <>
+                  <div className="text-center py-2 mb-6">
+                    <h2 className="text-3xl font-light text-zen-900 mb-2">Your Listening Calendar</h2>
+                    <p className="text-zen-500 text-sm">Listen to a podcast you like, at least {cfg.minMinutes} minutes a week.</p>
+                  </div>
+
+                  <div className="flex gap-2 mb-4">
+                    <Stat value={sum.streak} label="week streak" />
+                    <Stat value={sum.weeksDone + '/' + cfg.weeks} label="weeks done" />
+                    <Stat value={sum.totalMin} label={sum.bonusMin ? 'total min (+' + sum.bonusMin + ' bonus)' : 'total minutes'} />
+                  </div>
+
+                  <Calendar sum={sum} />
+
+                  {sum.thisWeekBonus && (
+                    <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-center">
+                      <div className="text-sm font-bold text-amber-800">💪 {sum.thisWeekLabel}</div>
+                      <div className="text-xs text-amber-700 mt-1">
+                        Bonus training during the break. Totally optional, and skipping it will not break your streak.
+                      </div>
+                    </div>
+                  )}
+
+                  {open.open ? (
+                    <button onClick={startRecord}
+                      className={'w-full mt-3 py-4 rounded-2xl font-bold shadow-lg transition-all ' +
+                        (sum.thisWeekBonus
+                          ? 'bg-amber-500 hover:bg-amber-400 text-white'
+                          : sum.thisWeekMinutes >= cfg.minMinutes
+                            ? 'bg-tune-100 text-tune-700 border border-tune-200 hover:bg-tune-200'
+                            : 'bg-tune-600 hover:bg-tune-500 text-white')}>
+                      {sum.thisWeekBonus
+                        ? (sum.thisWeekMinutes ? '★ ' + sum.thisWeekMinutes + ' bonus minutes. Log more' : 'Log some bonus listening')
+                        : sum.thisWeekMinutes >= cfg.minMinutes
+                          ? '✓ This week is done. Log another session'
+                          : 'Log what I listened to'}
+                    </button>
+                  ) : (
+                    <div className="w-full mt-4 py-4 rounded-2xl text-center text-sm text-zen-500 bg-zen-100 border border-zen-200">
+                      {open.msg}
+                    </div>
+                  )}
+                  <button onClick={() => { setBrowse(true); go('genre'); }}
+                    className="w-full mt-3 text-sm text-zen-400 hover:text-tune-600">Browse podcasts</button>
+                </>
+              )}
+
+              {step === 'same' && (
+                <>
+                  <Back to="home" />
+                  <h2 className="text-lg font-bold">What did you listen to?</h2>
+                  <p className="text-xs text-zen-500 mb-4">Pick the same show, or find a new one.</p>
+                  <Card onClick={useSame}>
+                    <div className="font-bold">{state.lastShow.showName}</div>
+                    <div className="text-xs text-zen-500 mt-1">Same as last time</div>
+                  </Card>
+                  <button onClick={() => { setBrowse(false); go('genre'); }}
+                    className="w-full py-3 bg-white border border-zen-200 rounded-2xl text-sm hover:bg-zen-100">
+                    Something different
+                  </button>
+                </>
+              )}
+
+              {step === 'genre' && (
+                <>
+                  <Back to={hasLast && !browse ? 'same' : 'home'} />
+                  <h2 className="text-lg font-bold">Pick a genre</h2>
+                  <p className="text-xs text-zen-500 mb-4">Each one has a few recommended shows.</p>
+                  {boot.genres.map((g) => (
+                    <Card key={g.id} onClick={() => openGenre(g)}>
+                      <div className="flex items-center gap-3">
+                        <div className="text-2xl">{g.emoji}</div>
+                        <div>
+                          <div className="font-bold text-[15px]">{g.name}</div>
+                          <div className="text-xs text-zen-500">{g.blurb}</div>
+                        </div>
+                      </div>
+                    </Card>
+                  ))}
+                </>
+              )}
+
+              {step === 'show' && genre && (
+                <>
+                  <Back to="genre" />
+                  <h2 className="text-lg font-bold">{genre.emoji} {genre.name}</h2>
+                  <p className="text-xs text-zen-500 mb-4">
+                    {browse ? 'Tap a link to open the show.'
+                            : 'Tap a link to open the show. When you are done, tap the card to log it.'}
+                  </p>
+                  {genre.shows.map((s) => (
+                    <Card key={s.id} onClick={browse ? null : () => chooseShow(s)}>
+                      <div className="font-bold text-[15px]">{s.name}</div>
+                      <div className="text-xs text-zen-500 mt-1">{s.desc}</div>
+                      <div className="flex flex-wrap gap-1.5 mt-2">
+                        {s.links.map((L) => (
+                          <a key={L.url} href={L.url} target="_blank" rel="noopener" onClick={(e) => e.stopPropagation()}
+                            className="text-xs text-tune-600 border border-tune-200 bg-tune-50 rounded-full px-3 py-1 hover:bg-tune-100">
+                            ▶ {L.label}
+                          </a>
+                        ))}
+                      </div>
+                    </Card>
+                  ))}
+                  {!browse && (
+                    <Card onClick={() => go('other')}>
+                      <div className="font-bold text-[15px]">Something else</div>
+                      <div className="text-xs text-zen-500 mt-1">A podcast that is not on this list</div>
+                    </Card>
+                  )}
+                </>
+              )}
+
+              {step === 'other' && (
+                <>
+                  <Back to="show" />
+                  <h2 className="text-lg font-bold">Name of the podcast</h2>
+                  <p className="text-xs text-zen-500 mb-4">What did you listen to?</p>
+                  <input value={otherName} onChange={(e) => setOtherName(e.target.value)} placeholder="e.g. Nihongo Radio"
+                    className="w-full border border-zen-300 rounded-xl px-4 py-3 focus:outline-none focus:border-tune-500" />
+                  {err && <p className="text-xs text-red-600 mt-2">{err}</p>}
+                  <button onClick={confirmOther} className="w-full mt-3 py-4 bg-tune-600 hover:bg-tune-500 text-white rounded-2xl font-bold shadow-lg">Next</button>
+                </>
+              )}
+
+              {step === 'minutes' && (
+                <>
+                  <Back to={hasLast ? 'same' : 'genre'} />
+                  <h2 className="text-lg font-bold">How long did you listen?</h2>
+                  <p className="text-xs text-zen-500 mb-4">{pick.showName}</p>
+                  {err && <div className="bg-red-50 text-red-700 text-sm p-3 rounded-lg mb-3 border border-red-100">{err}</div>}
+                  <div className="grid grid-cols-3 gap-2">
+                    {[5, 10, 15, 20, 25, 30].map((m) => (
+                      <button key={m} onClick={() => save(m)} disabled={busy}
+                        className="bg-white border border-zen-200 rounded-2xl py-5 text-lg font-bold hover:border-tune-500 hover:bg-tune-50 disabled:opacity-50">
+                        {m === 30 ? '30+' : m}
+                        <span className="block text-[11px] font-normal text-zen-500">min</span>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="text-center mt-4 text-sm text-zen-500">
+                    When was this?{' '}
+                    <select value={date} onChange={(e) => setDate(e.target.value)}
+                      className="border border-zen-200 rounded-lg px-2 py-1 bg-white text-zen-800">
+                      {dateOptions.map((o) => <option key={o.ymd} value={o.ymd}>{o.label}</option>)}
+                    </select>
+                  </div>
+                </>
+              )}
+
+              {step === 'done' && (
+                <>
+                  <div className="text-center py-12">
+                    <div className="w-24 h-24 bg-orange-100 rounded-full flex items-center justify-center text-6xl shadow-md mx-auto mb-4 border-2 border-orange-200">🐯</div>
+                    <h2 className="text-xl font-bold">Logged.</h2>
+                    <p className="text-sm text-zen-500 mt-1">{lastSaved && (lastSaved.showName + ' · ' + lastSaved.minutes + ' min')}</p>
+                    {sum.thisWeekMinutes >= cfg.minMinutes &&
+                      <p className="text-sm text-tune-600 font-bold mt-3">That is your {cfg.minMinutes} minutes for this week.</p>}
+                  </div>
+                  <button onClick={() => go('home')} className="w-full py-4 bg-tune-600 hover:bg-tune-500 text-white rounded-2xl font-bold shadow-lg">Back to my calendar</button>
+                  <button onClick={undo} disabled={busy} className="w-full mt-3 text-sm text-zen-400 hover:text-tune-600">Made a mistake? Undo</button>
+                </>
+              )}
+
+            </>
+          </Shell>
+        );
+      };
+
+      // ===== 教師の画面 =====
+      const TeacherApp = ({ passcode, onLogout }) => {
+        const [d, setD] = useState(null);
+        const [err, setErr] = useState('');
+
+        useEffect(() => {
+          gs('teacherGetData', passcode).then(setD).catch((e) => setErr(friendlyError(e)));
+        }, []);
+
+        if (err) return <Shell who="Teacher" onLogout={onLogout} wide><p className="text-center text-red-600 py-12">{err}</p></Shell>;
+        if (!d) return <Shell who="Teacher" onLogout={onLogout} wide><Spinner emoji="🐯" title="Loading..." subtitle="" /></Shell>;
+
+        const cfg = d.config, cw = cfg.currentWeek;
+        // 「経過した週」= 月曜日がもう来ている必須の週の数（ボーナス週は数えない）
+        const started = (w) => diffDays(w.monday, cfg.today) >= 0;
+        const elapsed = cfg.weekList.filter((w) => !w.bonus && started(w)).length;
+        let doneNow = 0, hit = 0, possible = 0, totalMin = 0, bonusStudents = 0;
+
+        const rows = d.students.map((s) => {
+          let achieved = 0, bonus = 0;
+          const cells = cfg.weekList.map((w) => {
+            const min = s.weeks[String(w.n)] ? s.weeks[String(w.n)].minutes : 0;
+            if (w.bonus) { bonus += min; return { w, min, bonus: true, started: started(w) }; }
+            const ok = min >= cfg.minMinutes;
+            if (ok) achieved++;
+            if (String(w.n) === String(cw) && ok) doneNow++;
+            if (started(w)) { possible++; if (ok) hit++; }
+            return { w, min, ok, started: started(w) };
+          });
+          if (bonus) bonusStudents++;
+          totalMin += s.totalMinutes;
+          return { s, cells, achieved, bonus, behind: elapsed > 1 && achieved < elapsed - 1 };
+        });
+
+        return (
+          <Shell who="Teacher" onLogout={onLogout} wide>
+            <>
+              <div className="text-center py-2 mb-6">
+                <h2 className="text-3xl font-light text-zen-900 mb-2">Class Overview</h2>
+                <p className="text-zen-500 text-sm">
+                  {cw ? (isNaN(Number(cw)) ? 'Pump-Up Week' : 'Week ' + cw) : 'Outside the listening weeks'}
+                  {' · '}{cfg.weeks} required weeks · minimum {cfg.minMinutes} minutes per week
+                </p>
+              </div>
+
+              <div className="flex gap-2 mb-5 flex-wrap">
+                <Stat value={d.students.length} label="students" />
+                <Stat value={doneNow} label="done this week" />
+                <Stat value={possible ? Math.round(hit / possible * 100) + '%' : '—'} label="weekly completion" />
+                <Stat value={bonusStudents} label="did Pump-Up Week" />
+              </div>
+
+              <div className="bg-white border border-zen-200 rounded-2xl p-4 mb-5 overflow-x-auto">
+                <table className="w-full text-xs border-collapse">
+                  <thead>
+                    <tr>
+                      <th className="text-left sticky left-0 bg-white min-w-[150px] text-zen-500 font-medium">Name</th>
+                      {cfg.weekList.map((w) => (
+                        <th key={String(w.n)} title={w.bonus ? w.label + ' (optional)' : ''}
+                          className={'px-1 font-medium ' + (w.bonus
+                            ? 'text-amber-600'
+                            : (String(w.n) === String(cw) ? 'text-tune-600 font-bold' : 'text-zen-400'))}>
+                          {w.bonus ? 'PU' : 'W' + w.n}
+                        </th>
+                      ))}
+                      <th className="text-zen-500 font-medium px-1">Weeks</th>
+                      <th className="text-zen-500 font-medium px-1">Min</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((r) => (
+                      <tr key={r.s.name}>
+                        <td className={'text-left sticky left-0 bg-white py-1 text-[13px] ' + (r.behind ? 'text-orange-600' : 'text-zen-800')}>{r.s.name}</td>
+                        {r.cells.map((c) => (
+                          <td key={String(c.w.n)} className="text-center py-1">
+                            <span title={c.min ? c.min + ' min' : (c.bonus ? 'no bonus listening' : 'no entry')}
+                              className="inline-block w-6 h-6 leading-6 rounded-md text-[10px]"
+                              style={{
+                                background: c.min
+                                  ? (c.bonus ? BONUS_LEVEL[levelOf(c.min)] : LEVEL[levelOf(c.min)])
+                                  : (c.bonus ? '#fdf8ee' : (c.started ? '#f6efea' : '#f7f7f5')),
+                                color: levelOf(c.min) >= 2 ? '#fff' : (c.bonus ? '#8a5a12' : '#565d93')
+                              }}>{c.min || ''}</span>
+                          </td>
+                        ))}
+                        <td className="text-center font-bold text-tune-600">{r.achieved}/{elapsed}</td>
+                        <td className="text-center text-zen-500">{r.s.totalMinutes}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="text-[11px] text-zen-400 mt-3">Numbers are total minutes for that week. Pale cells mean no entry. An orange name means two or more weeks with nothing. <span className="text-amber-600">PU = Pump-Up Week (optional, not counted toward the completion rate or the streak).</span></p>
+              </div>
+
+              <div className="bg-white border border-zen-200 rounded-2xl p-4 mb-5">
+                <h2 className="font-bold mb-2">Most popular shows</h2>
+                <ol className="list-decimal pl-5 text-sm space-y-0.5">
+                  {d.popular.length
+                    ? d.popular.slice(0, 12).map((x) => <li key={x.name}>{x.name} <span className="text-zen-400">({x.n})</span></li>)
+                    : <li className="text-zen-400 list-none">No entries yet</li>}
+                </ol>
+              </div>
+
+              <a href={cfg.sheetUrl} target="_blank" rel="noopener" className="text-sm text-tune-600 underline">Open the spreadsheet (raw data)</a>
+            </>
+          </Shell>
+        );
+      };
+
+      // ===== ルート =====
+      const App = () => {
+        const [boot, setBoot] = useState(null);
+        const [auth, setAuth] = useState(null);          // {name, pin}
+        const [teacher, setTeacher] = useState(null);    // passcode
+        const [state, setState] = useState(null);        // {entries, lastShow}
+        const [error, setError] = useState('');
+        const [busy, setBusy] = useState(false);
+        const [ready, setReady] = useState(false);
+
+        useEffect(() => {
+          (async () => {
+            try {
+              const b = await gs('getBootstrap');
+              setBoot(b);
+              const saved = loadAuth();
+              if (saved) {
+                try {
+                  await gs('studentLogin', saved.name, saved.pin);
+                  const st = await gs('getMyLog', saved);
+                  setAuth(saved); setState(st); saveAuth(saved);
+                } catch (e) { saveAuth(null); }
+              } else {
+                const tp = loadTeacher();
+                if (tp) {
+                  try { await gs('teacherLogin', tp); setTeacher(tp); } catch (e) {}
+                }
+              }
+            } catch (e) { setError(friendlyError(e)); }
+            setReady(true);
+          })();
+        }, []);
+
+        const handleStudentLogin = async (name, pin) => {
+          setBusy(true); setError('');
+          try {
+            await gs('studentLogin', name, pin);
+            const a = { name, pin };
+            const st = await gs('getMyLog', a);
+            saveAuth(a); setAuth(a); setState(st);
+          } catch (e) { setError(friendlyError(e)); }
+          setBusy(false);
+        };
+
+        const handleTeacherLogin = async (passcode) => {
+          setBusy(true); setError('');
+          try {
+            await gs('teacherLogin', passcode);
+            try { localStorage.setItem('TIG_TEACHER', passcode); } catch (e) {}
+            setTeacher(passcode);
+          } catch (e) { setError(friendlyError(e)); }
+          setBusy(false);
+        };
+
+        const logout = () => {
+          saveAuth(null);
+          try { localStorage.removeItem('TIG_TEACHER'); } catch (e) {}
+          setAuth(null); setTeacher(null); setState(null);
+        };
+
+        if (!ready) return <Spinner emoji="🐯" title="Loading Tune-In Gym..." subtitle="" />;
+        if (error && !boot) return <div className="min-h-screen flex items-center justify-center p-8 text-center text-red-600">{error}</div>;
+        if (teacher) return <TeacherApp passcode={teacher} onLogout={logout} />;
+        if (auth && state) return <StudentApp auth={auth} boot={boot} state={state} setState={setState} onLogout={logout} />;
+
+        return <LoginScreen students={boot.students} onStudentLogin={handleStudentLogin}
+                 onTeacherLogin={handleTeacherLogin} error={error} busy={busy} />;
+      };
+
+      createRoot(document.getElementById('root')).render(<App />);
+    </script>
+  </body>
+</html>
