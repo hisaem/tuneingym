@@ -4,8 +4,24 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Tune-In Gym - Japanese Listening Habit</title>
-    <!-- タブのアイコン（虎）。外部ファイルを使わず、SVGを直接埋め込んでいる -->
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text x='50' y='55' font-size='85' text-anchor='middle' dominant-baseline='central'>🐯</text></svg>">
+    <!-- タブのアイコン（トライ）。画像はサイトのルートの /icons/ に置く -->
+    <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+
+    <!-- ホーム画面アプリ（Gym Home）の中で開いても全画面のままにする設定。
+         下の7行を Write-Up Gym と Speak-Up Gym の index.html にも入れること。 -->
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#E07A5F">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="Gym Home">
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+    <style>
+      /* iOSで入力欄をタップしたときに画面が勝手に拡大しないようにする */
+      input, select, textarea { font-size: 16px !important; }
+      a, button { -webkit-tap-highlight-color: transparent; }
+    </style>
 
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
