@@ -4,6 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Tune-In Gym - Japanese Listening Habit</title>
+    <!-- タブのアイコン（虎）。外部ファイルを使わず、SVGを直接埋め込んでいる -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text x='50' y='55' font-size='85' text-anchor='middle' dominant-baseline='central'>🐯</text></svg>">
 
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -105,16 +107,19 @@
 
       const LEVEL = ['#efefe9', '#c5c9e4', '#a3aad2', '#6b73ae'];
       const BONUS_LEVEL = ['#efefe9', '#fae4bd', '#f3c579', '#e09f3e'];   // Pump-Up Week は琥珀色
+      const SANDBOX_LEVEL = ['#efefe9', '#dcdcd5', '#c2c2b6', '#a3a393']; // Try-Out Week は灰色
       const levelOf = (m) => (m >= 20 ? 3 : m >= 10 ? 2 : m > 0 ? 1 : 0);
+      const palette = (w) => (w.sandbox ? SANDBOX_LEVEL : w.bonus ? BONUS_LEVEL : LEVEL);
 
       // 週ごとの集計とストリークをまとめて計算。
-      // 週は cfg.weekList（[{n, monday, bonus?, label?}]）で与えられる。
+      // 週は cfg.weekList（[{n, monday, bonus?, sandbox?, label?}]）で与えられる。
       //   通常の週  … MIN_MINUTES 以上で ✓。ストリークに数える
-      //   ボーナス週… 任意参加。✓ もストリークも達成率も影響しない。合計分数には入る
-      // ストリークはリストの並び順で数え、ボーナス週は素通りするので途切れない。
+      //   ボーナス週… 任意参加。✓ もストリークも達成率も影響しないが、合計分数には入る
+      //   体験週    … 練習用。どの集計にも一切入らない（合計分数にも入らない）
+      // ストリークはリストの並び順で数え、ボーナス週と体験週は素通りするので途切れない。
       const summarize = (entries, cfg) => {
         const weeks = [];
-        let weeksDone = 0, totalMin = 0, bonusMin = 0, streak = 0, run = 0;
+        let weeksDone = 0, totalMin = 0, bonusMin = 0, sandboxMin = 0, streak = 0, run = 0;
         cfg.weekList.forEach((w) => {
           const days = [];
           let min = 0;
@@ -124,15 +129,20 @@
             if (e) min += e.minutes;
             days.push({ ymd, minutes: e ? e.minutes : 0, shows: e ? e.shows : [], future: diffDays(cfg.today, ymd) > 0, today: ymd === cfg.today });
           }
-          totalMin += min;
           const started = diffDays(w.monday, cfg.today) >= 0;              // その週が始まっている
           const finished = diffDays(addDays(w.monday, 6), cfg.today) > 0;  // その週が終わった
+          const base = { n: w.n, monday: w.monday, days, minutes: min, label: w.label,
+                         past: started, now: String(w.n) === String(cfg.currentWeek) };
 
-          if (w.bonus) {
-            // ボーナス週はストリークにも達成数にも影響させない（素通り）
+          if (w.sandbox) {           // 体験週：どこにも数えない
+            sandboxMin += min;
+            weeks.push({ ...base, sandbox: true, ok: false });
+            return;
+          }
+          totalMin += min;
+          if (w.bonus) {             // ボーナス週：合計分数には入るが、ストリークは素通り
             bonusMin += min;
-            weeks.push({ n: w.n, monday: w.monday, days, minutes: min, bonus: true, label: w.label,
-                         ok: false, past: started, now: String(w.n) === String(cfg.currentWeek) });
+            weeks.push({ ...base, bonus: true, ok: false });
             return;
           }
 
@@ -140,14 +150,14 @@
           if (ok) weeksDone++;
           if (ok) run++; else if (finished) run = 0;   // 終わった週で未達成ならリセット
           if (started) streak = run;                   // 今週がまだでも途切れない
-          weeks.push({ n: w.n, monday: w.monday, days, minutes: min, ok, past: started,
-                       now: String(w.n) === String(cfg.currentWeek) });
+          weeks.push({ ...base, ok });
         });
 
         const nowWeek = weeks.find((x) => String(x.n) === String(cfg.currentWeek));
-        return { weeks, weeksDone, totalMin, bonusMin, streak,
+        return { weeks, weeksDone, totalMin, bonusMin, sandboxMin, streak,
                  thisWeekMinutes: nowWeek ? nowWeek.minutes : 0,
                  thisWeekBonus: !!(nowWeek && nowWeek.bonus),
+                 thisWeekSandbox: !!(nowWeek && nowWeek.sandbox),
                  thisWeekLabel: nowWeek ? nowWeek.label : '' };
       };
 
@@ -183,6 +193,9 @@
                 <h1 className="text-xl font-bold tracking-tight">Tune-In Gym</h1>
               </div>
               <div className="flex items-center gap-4">
+                <a href="/gymhome/" className="text-xs text-zen-500 hover:text-tune-600 flex items-center gap-1" title="Switch to another gym">
+                  <span className="text-sm">🐯</span><span className="hidden sm:inline">Gym Home</span>
+                </a>
                 <span className="text-sm font-medium text-zen-600 hidden sm:block">{who}</span>
                 <button onClick={onLogout} className="text-xs text-zen-400 hover:text-tune-600 underline">Logout</button>
               </div>
@@ -365,43 +378,46 @@
             {['M','T','W','T','F','S','S'].map((d, i) => <div key={i} className="text-[10px] text-zen-400 text-center">{d}</div>)}
             <div></div>
           </div>
-          {sum.weeks.map((w) => (
-            <div key={String(w.n)}>
-              {w.bonus && (
-                <div className="flex items-center gap-2 mt-2 mb-1.5">
-                  <div className="h-px flex-1 bg-amber-200"></div>
-                  <span className="text-[10px] font-bold tracking-wide text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2.5 py-0.5">
-                    💪 {w.label} · optional
-                  </span>
-                  <div className="h-px flex-1 bg-amber-200"></div>
+          {sum.weeks.map((w) => {
+            const special = w.bonus || w.sandbox;
+            const tone = w.sandbox
+              ? { line: 'bg-zen-300', chip: 'text-zen-600 bg-zen-100 border-zen-300', lab: 'text-zen-500', mark: 'text-zen-400', icon: '🧪' }
+              : { line: 'bg-amber-200', chip: 'text-amber-700 bg-amber-50 border-amber-200', lab: 'text-amber-600', mark: 'text-amber-500', icon: '💪' };
+            return (
+              <div key={String(w.n)}>
+                {special && (
+                  <div className="flex items-center gap-2 mt-2 mb-1.5">
+                    <div className={'h-px flex-1 ' + tone.line}></div>
+                    <span className={'text-[10px] font-bold tracking-wide border rounded-full px-2.5 py-0.5 ' + tone.chip}>
+                      {tone.icon} {w.label} · {w.sandbox ? 'practice only' : 'optional'}
+                    </span>
+                    <div className={'h-px flex-1 ' + tone.line}></div>
+                  </div>
+                )}
+                <div className="grid gap-1 items-center mb-1" style={{ gridTemplateColumns: '28px repeat(7, 1fr) 24px' }}>
+                  <div className={'text-[10px] text-right pr-1 ' +
+                    (special ? tone.lab : (w.now ? 'text-tune-600 font-bold' : 'text-zen-400'))}>
+                    {special ? String(w.n) : 'W' + w.n}
+                  </div>
+                  {w.days.map((d) => (
+                    <div key={d.ymd}
+                      title={d.ymd + (d.minutes ? '  ·  ' + d.minutes + ' min  ·  ' + d.shows.join(', ') : '')}
+                      className="rounded-md"
+                      style={{
+                        aspectRatio: '1 / 1',
+                        background: d.minutes ? palette(w)[levelOf(d.minutes)] : (d.future ? '#f7f7f5' : LEVEL[0]),
+                        boxShadow: d.today ? '0 0 0 2px #565d93' : 'none'
+                      }}></div>
+                  ))}
+                  <div className={'text-xs text-center ' +
+                    (special ? tone.mark : (w.ok ? 'text-tune-600 font-bold' : 'text-zen-300'))}>
+                    {special ? (w.minutes ? '★' : '') : (w.ok ? '✓' : (w.past ? '·' : ''))}
+                  </div>
                 </div>
-              )}
-              <div className="grid gap-1 items-center mb-1" style={{ gridTemplateColumns: '28px repeat(7, 1fr) 24px' }}>
-                <div className={'text-[10px] text-right pr-1 ' +
-                  (w.bonus ? (w.now ? 'text-amber-700 font-bold' : 'text-amber-600')
-                           : (w.now ? 'text-tune-600 font-bold' : 'text-zen-400'))}>
-                  {w.bonus ? 'PU' : 'W' + w.n}
-                </div>
-                {w.days.map((d) => (
-                  <div key={d.ymd}
-                    title={d.ymd + (d.minutes ? '  ·  ' + d.minutes + ' min  ·  ' + d.shows.join(', ') : '')}
-                    className="rounded-md"
-                    style={{
-                      aspectRatio: '1 / 1',
-                      background: d.minutes
-                        ? (w.bonus ? BONUS_LEVEL[levelOf(d.minutes)] : LEVEL[levelOf(d.minutes)])
-                        : (d.future ? '#f7f7f5' : LEVEL[0]),
-                      boxShadow: d.today ? '0 0 0 2px #565d93' : 'none'
-                    }}></div>
-                ))}
-                <div className={'text-xs text-center ' +
-                  (w.bonus ? 'text-amber-500' : (w.ok ? 'text-tune-600 font-bold' : 'text-zen-300'))}>
-                  {w.bonus ? (w.minutes ? '★' : '') : (w.ok ? '✓' : (w.past ? '·' : ''))}
-                </div>
+                {special && <div className={'h-px mb-2 mt-1.5 ' + tone.line}></div>}
               </div>
-              {w.bonus && <div className="h-px bg-amber-200 mb-2 mt-1.5"></div>}
-            </div>
-          ))}
+            );
+          })}
           <div className="flex items-center justify-end gap-1 mt-2 text-[10px] text-zen-400">
             less
             {LEVEL.slice(1).map((c, i) => <span key={i} className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: c }}></span>)}
@@ -503,6 +519,16 @@
 
                   <Calendar sum={sum} />
 
+                  {sum.thisWeekSandbox && (
+                    <div className="mt-4 rounded-2xl border border-zen-300 bg-zen-100 p-4 text-center">
+                      <div className="text-sm font-bold text-zen-700">🧪 {sum.thisWeekLabel}</div>
+                      <div className="text-xs text-zen-600 mt-1">
+                        This week is just for trying things out. Log anything you like, undo it, log it again.
+                        <br/>Nothing this week is counted. The real weeks start on {cfg.weekList.find((w) => !w.bonus && !w.sandbox).monday}.
+                      </div>
+                    </div>
+                  )}
+
                   {sum.thisWeekBonus && (
                     <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-center">
                       <div className="text-sm font-bold text-amber-800">💪 {sum.thisWeekLabel}</div>
@@ -515,16 +541,20 @@
                   {open.open ? (
                     <button onClick={startRecord}
                       className={'w-full mt-3 py-4 rounded-2xl font-bold shadow-lg transition-all ' +
-                        (sum.thisWeekBonus
-                          ? 'bg-amber-500 hover:bg-amber-400 text-white'
+                        (sum.thisWeekSandbox
+                          ? 'bg-zen-600 hover:bg-zen-500 text-white'
+                          : sum.thisWeekBonus
+                            ? 'bg-amber-500 hover:bg-amber-400 text-white'
+                            : sum.thisWeekMinutes >= cfg.minMinutes
+                              ? 'bg-tune-100 text-tune-700 border border-tune-200 hover:bg-tune-200'
+                              : 'bg-tune-600 hover:bg-tune-500 text-white')}>
+                      {sum.thisWeekSandbox
+                        ? 'Try logging something'
+                        : sum.thisWeekBonus
+                          ? (sum.thisWeekMinutes ? '★ ' + sum.thisWeekMinutes + ' bonus minutes. Log more' : 'Log some bonus listening')
                           : sum.thisWeekMinutes >= cfg.minMinutes
-                            ? 'bg-tune-100 text-tune-700 border border-tune-200 hover:bg-tune-200'
-                            : 'bg-tune-600 hover:bg-tune-500 text-white')}>
-                      {sum.thisWeekBonus
-                        ? (sum.thisWeekMinutes ? '★ ' + sum.thisWeekMinutes + ' bonus minutes. Log more' : 'Log some bonus listening')
-                        : sum.thisWeekMinutes >= cfg.minMinutes
-                          ? '✓ This week is done. Log another session'
-                          : 'Log what I listened to'}
+                            ? '✓ This week is done. Log another session'
+                            : 'Log what I listened to'}
                     </button>
                   ) : (
                     <div className="w-full mt-4 py-4 rounded-2xl text-center text-sm text-zen-500 bg-zen-100 border border-zen-200">
@@ -673,14 +703,15 @@
         const cfg = d.config, cw = cfg.currentWeek;
         // 「経過した週」= 月曜日がもう来ている必須の週の数（ボーナス週は数えない）
         const started = (w) => diffDays(w.monday, cfg.today) >= 0;
-        const elapsed = cfg.weekList.filter((w) => !w.bonus && started(w)).length;
-        let doneNow = 0, hit = 0, possible = 0, totalMin = 0, bonusStudents = 0;
+        const elapsed = cfg.weekList.filter((w) => !w.bonus && !w.sandbox && started(w)).length;
+        let doneNow = 0, hit = 0, possible = 0, totalMin = 0, bonusStudents = 0, triedStudents = 0;
 
         const rows = d.students.map((s) => {
-          let achieved = 0, bonus = 0;
+          let achieved = 0, bonus = 0, tried = 0;
           const cells = cfg.weekList.map((w) => {
             const min = s.weeks[String(w.n)] ? s.weeks[String(w.n)].minutes : 0;
-            if (w.bonus) { bonus += min; return { w, min, bonus: true, started: started(w) }; }
+            if (w.sandbox) { tried += min; return { w, min, special: true, started: started(w) }; }
+            if (w.bonus) { bonus += min; return { w, min, special: true, started: started(w) }; }
             const ok = min >= cfg.minMinutes;
             if (ok) achieved++;
             if (String(w.n) === String(cw) && ok) doneNow++;
@@ -688,9 +719,11 @@
             return { w, min, ok, started: started(w) };
           });
           if (bonus) bonusStudents++;
+          if (tried) triedStudents++;
           totalMin += s.totalMinutes;
-          return { s, cells, achieved, bonus, behind: elapsed > 1 && achieved < elapsed - 1 };
+          return { s, cells, achieved, bonus, tried, behind: elapsed > 1 && achieved < elapsed - 1 };
         });
+        const hasSandbox = cfg.weekList.some((w) => w.sandbox);
 
         return (
           <Shell who="Teacher" onLogout={onLogout} wide>
@@ -698,7 +731,7 @@
               <div className="text-center py-2 mb-6">
                 <h2 className="text-3xl font-light text-zen-900 mb-2">Class Overview</h2>
                 <p className="text-zen-500 text-sm">
-                  {cw ? (isNaN(Number(cw)) ? 'Pump-Up Week' : 'Week ' + cw) : 'Outside the listening weeks'}
+                  {cw ? (isNaN(Number(cw)) ? (cfg.weekList.find((w) => String(w.n) === String(cw)) || {}).label : 'Week ' + cw) : 'Outside the listening weeks'}
                   {' · '}{cfg.weeks} required weeks · minimum {cfg.minMinutes} minutes per week
                 </p>
               </div>
@@ -707,7 +740,9 @@
                 <Stat value={d.students.length} label="students" />
                 <Stat value={doneNow} label="done this week" />
                 <Stat value={possible ? Math.round(hit / possible * 100) + '%' : '—'} label="weekly completion" />
-                <Stat value={bonusStudents} label="did Pump-Up Week" />
+                {hasSandbox
+                  ? <Stat value={triedStudents} label="tried it out" />
+                  : <Stat value={bonusStudents} label="did Pump-Up Week" />}
               </div>
 
               <div className="bg-white border border-zen-200 rounded-2xl p-4 mb-5 overflow-x-auto">
@@ -716,11 +751,13 @@
                     <tr>
                       <th className="text-left sticky left-0 bg-white min-w-[150px] text-zen-500 font-medium">Name</th>
                       {cfg.weekList.map((w) => (
-                        <th key={String(w.n)} title={w.bonus ? w.label + ' (optional)' : ''}
-                          className={'px-1 font-medium ' + (w.bonus
-                            ? 'text-amber-600'
-                            : (String(w.n) === String(cw) ? 'text-tune-600 font-bold' : 'text-zen-400'))}>
-                          {w.bonus ? 'PU' : 'W' + w.n}
+                        <th key={String(w.n)} title={w.label ? w.label + (w.sandbox ? ' (practice only)' : ' (optional)') : ''}
+                          className={'px-1 font-medium ' + (w.sandbox
+                            ? 'text-zen-400'
+                            : w.bonus
+                              ? 'text-amber-600'
+                              : (String(w.n) === String(cw) ? 'text-tune-600 font-bold' : 'text-zen-400'))}>
+                          {(w.bonus || w.sandbox) ? String(w.n) : 'W' + w.n}
                         </th>
                       ))}
                       <th className="text-zen-500 font-medium px-1">Weeks</th>
@@ -733,13 +770,13 @@
                         <td className={'text-left sticky left-0 bg-white py-1 text-[13px] ' + (r.behind ? 'text-orange-600' : 'text-zen-800')}>{r.s.name}</td>
                         {r.cells.map((c) => (
                           <td key={String(c.w.n)} className="text-center py-1">
-                            <span title={c.min ? c.min + ' min' : (c.bonus ? 'no bonus listening' : 'no entry')}
+                            <span title={c.min ? c.min + ' min' : (c.special ? 'nothing logged' : 'no entry')}
                               className="inline-block w-6 h-6 leading-6 rounded-md text-[10px]"
                               style={{
                                 background: c.min
-                                  ? (c.bonus ? BONUS_LEVEL[levelOf(c.min)] : LEVEL[levelOf(c.min)])
-                                  : (c.bonus ? '#fdf8ee' : (c.started ? '#f6efea' : '#f7f7f5')),
-                                color: levelOf(c.min) >= 2 ? '#fff' : (c.bonus ? '#8a5a12' : '#565d93')
+                                  ? palette(c.w)[levelOf(c.min)]
+                                  : (c.special ? (c.w.sandbox ? '#f4f4f1' : '#fdf8ee') : (c.started ? '#f6efea' : '#f7f7f5')),
+                                color: levelOf(c.min) >= 2 ? '#fff' : (c.w.sandbox ? '#6b6b58' : c.w.bonus ? '#8a5a12' : '#565d93')
                               }}>{c.min || ''}</span>
                           </td>
                         ))}
@@ -749,7 +786,7 @@
                     ))}
                   </tbody>
                 </table>
-                <p className="text-[11px] text-zen-400 mt-3">Numbers are total minutes for that week. Pale cells mean no entry. An orange name means two or more weeks with nothing. <span className="text-amber-600">PU = Pump-Up Week (optional, not counted toward the completion rate or the streak).</span></p>
+                <p className="text-[11px] text-zen-400 mt-3">Numbers are total minutes for that week. Pale cells mean no entry. An orange name means two or more weeks with nothing. <span className="text-zen-500">TRY = Try-Out Week (practice, counted nowhere).</span> <span className="text-amber-600">PU = Pump-Up Week (optional, not counted toward the completion rate or the streak).</span></p>
               </div>
 
               <div className="bg-white border border-zen-200 rounded-2xl p-4 mb-5">
