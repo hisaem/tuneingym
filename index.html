@@ -121,6 +121,15 @@
         return Math.round((new Date(+pb[0], +pb[1] - 1, +pb[2]) - new Date(+pa[0], +pa[1] - 1, +pa[2])) / 86400000);
       };
 
+      const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      const DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+      // '2026-09-01' → 'Tue, Sep 1'
+      const longDate = (ymd) => {
+        const p = String(ymd).split('-');
+        const d = new Date(+p[0], +p[1] - 1, +p[2]);
+        return DOW[d.getDay()] + ', ' + MONTHS[d.getMonth()] + ' ' + d.getDate();
+      };
+
       const LEVEL = ['#efefe9', '#c5c9e4', '#a3aad2', '#6b73ae'];
       const BONUS_LEVEL = ['#efefe9', '#fae4bd', '#f3c579', '#e09f3e'];   // Pump-Up Week は琥珀色
       const SANDBOX_LEVEL = ['#efefe9', '#dcdcd5', '#c2c2b6', '#a3a393']; // Try-Out Week は灰色
@@ -459,6 +468,17 @@
         const open = todayStatus(cfg);
         const hasLast = !!(state.lastShow && state.lastShow.showName);
 
+        // 履歴（新しい順）。サーバーが並べたものを日付ごとにまとめ直すだけ。
+        const hist = state.history || [];
+        const weekMeta = (n) => cfg.weekList.find((w) => String(w.n) === String(n)) || {};
+        const histDays = [];
+        hist.forEach((h) => {
+          let g = histDays[histDays.length - 1];
+          if (!g || g.date !== h.date) { g = { date: h.date, minutes: 0, items: [] }; histDays.push(g); }
+          g.minutes += h.minutes;
+          g.items.push(h);
+        });
+
         const go = (s) => { setStep(s); setErr(''); window.scrollTo(0, 0); };
 
         const startRecord = () => { setBrowse(false); setDate(cfg.today); go(hasLast ? 'same' : 'genre'); };
@@ -577,8 +597,70 @@
                       {open.msg}
                     </div>
                   )}
-                  <button onClick={() => { setBrowse(true); go('genre'); }}
-                    className="w-full mt-3 text-sm text-zen-400 hover:text-tune-600">Browse podcasts</button>
+                  <div className="flex gap-4 justify-center mt-3">
+                    <button onClick={() => { setBrowse(true); go('genre'); }}
+                      className="text-sm text-zen-400 hover:text-tune-600">Browse podcasts</button>
+                    <span className="text-zen-300">·</span>
+                    <button onClick={() => go('history')}
+                      className="text-sm text-zen-400 hover:text-tune-600">My history</button>
+                  </div>
+                </>
+              )}
+
+              {step === 'history' && (
+                <>
+                  <Back to="home" />
+                  <h2 className="text-lg font-bold">My listening history</h2>
+                  <p className="text-xs text-zen-500 mb-4">
+                    {hist.length
+                      ? hist.length + (hist.length === 1 ? ' session' : ' sessions') + ', newest first.'
+                      : 'Everything you log shows up here.'}
+                  </p>
+
+                  {!hist.length && (
+                    <Card>
+                      <div className="text-sm text-zen-500">
+                        Nothing logged yet. Listen to something you like, tap “Log what I listened to,”
+                        and it will appear here.
+                      </div>
+                    </Card>
+                  )}
+
+                  {histDays.map((g) => (
+                    <div key={g.date} className="mb-4">
+                      <div className="flex items-baseline justify-between mb-1.5">
+                        <div className="text-[11px] font-bold tracking-wide text-zen-400 uppercase">{longDate(g.date)}</div>
+                        {g.items.length > 1 && <div className="text-[11px] text-zen-400">{g.minutes} min total</div>}
+                      </div>
+                      {g.items.map((h, i) => {
+                        const w = weekMeta(h.week);
+                        return (
+                          <div key={g.date + '-' + i}
+                            className="bg-white border border-zen-200 rounded-2xl px-4 py-3 mb-1.5 flex items-center gap-3">
+                            <div className="flex-1 min-w-0">
+                              <div className="text-[15px] font-bold text-zen-900 break-words">{h.showName || 'A podcast'}</div>
+                              <div className="text-[11px] text-zen-400 mt-0.5">
+                                {w.sandbox
+                                  ? '🧪 ' + (w.label || 'Try-Out Week') + ' · practice, not counted'
+                                  : w.bonus
+                                    ? '💪 ' + (w.label || 'Bonus week')
+                                    : 'Week ' + h.week}
+                              </div>
+                            </div>
+                            <div className="text-right shrink-0">
+                              <span className="text-lg font-bold text-tune-600">{h.minutes}</span>
+                              <span className="text-[11px] text-zen-500"> min</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ))}
+
+                  <button onClick={() => go('home')}
+                    className="w-full mt-2 py-3 bg-white border border-zen-200 rounded-2xl text-sm hover:bg-zen-100">
+                    Back to my calendar
+                  </button>
                 </>
               )}
 
