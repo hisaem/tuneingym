@@ -68,17 +68,55 @@
       // ★デプロイしたGASウェブアプリのURL（…/exec）をここに貼る★
       const API_URL = 'https://script.google.com/macros/s/AKfycbzdYzR_15z5l261LS1_n0aCybQ-owpAdgCm9LK3iQy9MKkbPSC4wjnSHVbIGS4A68fWzw/exec';
 
-      const gs = async (fn, ...args) => {
-        const res = await fetch(API_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify({ fn, args }),
-          redirect: 'follow'
-        });
-        if (!res.ok) throw new Error('Server error (HTTP ' + res.status + ')');
-        const json = await res.json();
+      // GASへのPOSTは必ず script.googleusercontent.com へ302リダイレクトされ、
+      // その2回目のリクエストがGoogle側の都合で時々404を返す（既知のクセ）。
+      // サーバーは正常なので、届かなかっただけの失敗は自動で再送する。
+      // ただし書き込みを伴う関数は二重登録の恐れがあるため再送しない。
+      const RETRYABLE_FN = {
+        getBootstrap: 1, studentLogin: 1, teacherLogin: 1,
+        getMyLog: 1, teacherGetData: 1
+      };
+      const RETRY_WAITS_MS = [800, 2000, 4000];
+      const sleep_ = (ms) => new Promise((r) => setTimeout(r, ms));
+      const transient_ = (msg) => { const e = new Error(msg); e.transient = true; return e; };
+
+      const gsOnce_ = async (fn, args) => {
+        let res;
+        try {
+          res = await fetch(API_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({ fn, args }),
+            redirect: 'follow'
+          });
+        } catch (netErr) {
+          throw transient_('Network error');
+        }
+        if (!res.ok) throw transient_('Server error (HTTP ' + res.status + ')');
+        let json;
+        try {
+          json = JSON.parse(await res.text());
+        } catch (parseErr) {
+          throw transient_('Server error (invalid response)');
+        }
+        // ここから先はGASが実際に処理した結果。再送しても同じなのでそのまま投げる。
         if (!json.ok) throw new Error(json.error || 'Unknown server error');
         return json.data;
+      };
+
+      const gs = async (fn, ...args) => {
+        const maxRetry = RETRYABLE_FN[fn] ? RETRY_WAITS_MS.length : 0;
+        let lastErr;
+        for (let i = 0; i <= maxRetry; i++) {
+          try {
+            return await gsOnce_(fn, args);
+          } catch (err) {
+            if (!err || err.transient !== true) throw err;
+            lastErr = err;
+            if (i < maxRetry) await sleep_(RETRY_WAITS_MS[i]);
+          }
+        }
+        throw lastErr;
       };
 
       const friendlyError = (e) => {
