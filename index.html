@@ -502,6 +502,7 @@
         const [err, setErr] = useState('');
         const [lastSaved, setLastSaved] = useState(null);
         const [backTo, setBackTo] = useState('same');   // minutes 画面の「戻る」先
+        const [savingMin, setSavingMin] = useState(null);  // 保存中に押した分数（スピナーを出す場所）
 
         const sum = summarize(state.entries, cfg);
         const open = todayStatus(cfg);
@@ -538,14 +539,14 @@
         };
 
         const save = async (minutes) => {
-          setBusy(true); setErr('');
+          setBusy(true); setSavingMin(minutes); setErr('');
           try {
             const res = await gs('logListen', auth, { date, ...pick, minutes });
             setState(res);
             setLastSaved({ showName: pick.showName, minutes });
             go('done');
           } catch (e) { setErr(friendlyError(e)); }
-          setBusy(false);
+          setBusy(false); setSavingMin(null);
         };
 
         const undo = async () => {
@@ -809,15 +810,33 @@
                   <div className="grid grid-cols-3 gap-2">
                     {[5, 10, 15, 20, 25, 30].map((m) => (
                       <button key={m} onClick={() => save(m)} disabled={busy}
-                        className="bg-white border border-zen-200 rounded-2xl py-5 text-lg font-bold hover:border-tune-500 hover:bg-tune-50 disabled:opacity-50">
-                        {m === 30 ? '30+' : m}
-                        <span className="block text-[11px] font-normal text-zen-500">min</span>
+                        className={'rounded-2xl py-5 text-lg font-bold border transition-opacity '
+                          + (savingMin === m
+                              ? 'bg-tune-50 border-tune-500 text-tune-700'
+                              : 'bg-white border-zen-200 hover:border-tune-500 hover:bg-tune-50 ' + (busy ? 'opacity-40' : ''))}>
+                        {savingMin === m ? (
+                          <>
+                            <span className="mx-auto block w-6 h-6 border-2 border-tune-200 border-t-tune-600 rounded-full animate-spin"></span>
+                            <span className="block text-[11px] font-normal text-tune-600 mt-1">saving</span>
+                          </>
+                        ) : (
+                          <>
+                            {m === 30 ? '30+' : m}
+                            <span className="block text-[11px] font-normal text-zen-500">min</span>
+                          </>
+                        )}
                       </button>
                     ))}
                   </div>
-                  <div className="text-center mt-4 text-sm text-zen-500">
+                  {busy && (
+                    <p className="flex items-center justify-center gap-2 text-sm text-tune-600 font-bold mt-4">
+                      <span className="w-4 h-4 border-2 border-tune-200 border-t-tune-600 rounded-full animate-spin"></span>
+                      Saving your listening...
+                    </p>
+                  )}
+                  <div className={'text-center mt-4 text-sm text-zen-500 ' + (busy ? 'opacity-40' : '')}>
                     When was this?{' '}
-                    <select value={date} onChange={(e) => setDate(e.target.value)}
+                    <select value={date} onChange={(e) => setDate(e.target.value)} disabled={busy}
                       className="border border-zen-200 rounded-lg px-2 py-1 bg-white text-zen-800">
                       {dateOptions.map((o) => <option key={o.ymd} value={o.ymd}>{o.label}</option>)}
                     </select>
@@ -835,7 +854,9 @@
                       <p className="text-sm text-tune-600 font-bold mt-3">That is your {cfg.minMinutes} minutes for this week.</p>}
                   </div>
                   <button onClick={() => go('home')} className="w-full py-4 bg-tune-600 hover:bg-tune-500 text-white rounded-2xl font-bold shadow-lg">Back to my calendar</button>
-                  <button onClick={undo} disabled={busy} className="w-full mt-3 text-sm text-zen-400 hover:text-tune-600">Made a mistake? Undo</button>
+                  <button onClick={undo} disabled={busy} className="w-full mt-3 text-sm text-zen-400 hover:text-tune-600 disabled:opacity-50">
+                    {busy ? 'Undoing...' : 'Made a mistake? Undo'}
+                  </button>
                 </>
               )}
 
